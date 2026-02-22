@@ -104,9 +104,10 @@ class GradientInversionAttack:
         Returns:
             (reconstructed_data, final_loss)
         """
-        # Initialize random dummy data
-        dummy_x = torch.randn(1, *input_shape, device=self.device, requires_grad=True)
-        dummy_y = torch.sigmoid(torch.randn(1, num_targets, device=self.device))
+        # Initialize random dummy data (batch_size >= 2 required for BatchNorm)
+        dummy_batch = 4
+        dummy_x = torch.randn(dummy_batch, *input_shape, device=self.device, requires_grad=True)
+        dummy_y = torch.sigmoid(torch.randn(dummy_batch, num_targets, device=self.device))
         dummy_y = dummy_y.detach().requires_grad_(True)
         
         optimizer = torch.optim.LBFGS(
@@ -206,9 +207,10 @@ def run_gradient_inversion_experiment(
     device = torch.device(device)
     model = model.to(device).eval()
     
-    # Use a small batch for the attack
-    x_target = torch.FloatTensor(X_sample[:1]).to(device)
-    y_target = torch.FloatTensor(Y_sample[:1]).to(device)
+    # Use a small batch for the attack (must be >1 for BatchNorm in training mode)
+    batch_size = min(4, len(X_sample))
+    x_target = torch.FloatTensor(X_sample[:batch_size]).to(device)
+    y_target = torch.FloatTensor(Y_sample[:batch_size]).to(device)
     
     attacker = GradientInversionAttack(model, device)
     

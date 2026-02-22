@@ -6,6 +6,7 @@ the standard method used in top FL papers (FedAvg, FedProx, SCAFFOLD).
 """
 
 import os
+import json
 import argparse
 import logging
 import numpy as np
@@ -283,7 +284,6 @@ def save_partitions(
                        for i, indices in enumerate(partitions)}
     }
     
-    import json
     filepath = os.path.join(output_dir, f"partitions_alpha{alpha}.json")
     with open(filepath, "w") as f:
         json.dump(partition_data, f)

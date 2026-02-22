@@ -56,7 +56,7 @@ def run_fedavg_baseline(
     
     logger.info("=" * 60)
     logger.info("VANILLA FedAvg BASELINE (No DP, No FedProx)")
-    logger.info(f"  Rounds: {num_rounds}, Clients: {num_clients}, α: {alpha}")
+    logger.info(f"  Rounds: {num_rounds}, Clients: {num_clients}, alpha: {alpha}")
     logger.info("=" * 60)
     
     # Prepare data
@@ -135,7 +135,7 @@ def run_fedavg_dp_baseline(
         config.data.synthetic_num_samples = 50000
     
     logger.info("=" * 60)
-    logger.info(f"FedAvg + DP BASELINE (σ={noise_multiplier})")
+    logger.info(f"FedAvg + DP BASELINE (sigma={noise_multiplier})")
     logger.info("=" * 60)
     
     # ⚠️ DP training is 3-5x slower — GPU recommended!

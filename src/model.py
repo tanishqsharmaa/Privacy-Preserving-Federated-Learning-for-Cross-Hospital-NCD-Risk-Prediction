@@ -60,25 +60,22 @@ class MultiTaskNCD(nn.Module):
         
         self.encoder = nn.Sequential(*encoder_layers)
         
-        # Task-specific heads
+        # Task-specific heads (output raw logits; sigmoid applied at inference)
         last_hidden = hidden_dims[-1]
         self.diabetes_head = nn.Sequential(
             nn.Linear(last_hidden, 32),
             nn.ReLU(),
             nn.Linear(32, 1),
-            nn.Sigmoid()
         )
         self.hypertension_head = nn.Sequential(
             nn.Linear(last_hidden, 32),
             nn.ReLU(),
             nn.Linear(32, 1),
-            nn.Sigmoid()
         )
         self.cvd_head = nn.Sequential(
             nn.Linear(last_hidden, 32),
             nn.ReLU(),
             nn.Linear(32, 1),
-            nn.Sigmoid()
         )
         
         self._heads = [self.diabetes_head, self.hypertension_head, self.cvd_head]
@@ -87,19 +84,25 @@ class MultiTaskNCD(nn.Module):
         """
         Forward pass.
         
+        During training: returns raw logits (for BCEWithLogitsLoss).
+        During eval: returns sigmoid probabilities.
+        
         Args:
             x: Input features, shape (batch_size, input_dim)
         
         Returns:
             Tuple of 3 tensors, each shape (batch_size, 1):
-              (diabetes_prob, hypertension_prob, cvd_prob)
+              (diabetes_logit_or_prob, hypertension_logit_or_prob, cvd_logit_or_prob)
         """
         z = self.encoder(x)
-        return (
+        logits = (
             self.diabetes_head(z),
             self.hypertension_head(z),
             self.cvd_head(z)
         )
+        if self.training:
+            return logits
+        return tuple(torch.sigmoid(l) for l in logits)
     
     def get_encoder_output(self, x: torch.Tensor) -> torch.Tensor:
         """Get shared encoder representation (for SHAP analysis)."""
@@ -141,11 +144,11 @@ class MultiTaskLoss(nn.Module):
         
         if pos_weights is not None:
             self.criteria = [
-                nn.BCELoss(weight=torch.tensor([w]))
+                nn.BCEWithLogitsLoss(pos_weight=torch.tensor([w]))
                 for w in pos_weights
             ]
         else:
-            self.criteria = [nn.BCELoss() for _ in range(3)]
+            self.criteria = [nn.BCEWithLogitsLoss() for _ in range(3)]
     
     def forward(
         self,
@@ -256,13 +259,18 @@ if __name__ == "__main__":
     print(f"Model architecture:\n{model}")
     print(f"\nParameter counts: {model.parameter_count()}")
     
-    # Forward pass test
+    # Forward pass test (eval mode → probabilities)
+    model.eval()
     batch = torch.randn(32, input_dim)
     d_pred, h_pred, c_pred = model(batch)
-    print(f"\nForward pass shapes:")
+    print(f"\nForward pass shapes (eval mode → probabilities):")
     print(f"  Diabetes:      {d_pred.shape}")
     print(f"  Hypertension:  {h_pred.shape}")
     print(f"  CVD:           {c_pred.shape}")
+    
+    # Loss test (train mode → logits for BCEWithLogitsLoss)
+    model.train()
+    d_logit, h_logit, c_logit = model(batch)
     
     # Loss test
     targets = (
@@ -272,13 +280,13 @@ if __name__ == "__main__":
     )
     
     loss_fn = MultiTaskLoss()
-    total_loss, per_task = loss_fn((d_pred, h_pred, c_pred), targets)
+    total_loss, per_task = loss_fn((d_logit, h_logit, c_logit), targets)
     print(f"\nLoss values: {per_task}")
     
     # FedProx loss test
     fedprox_loss = FedProxLoss(mu=0.01)
     global_params = [p.clone().detach() for p in model.parameters()]
     total, per_task = fedprox_loss(
-        (d_pred, h_pred, c_pred), targets, model, global_params
+        (d_logit, h_logit, c_logit), targets, model, global_params
     )
     print(f"FedProx loss: {per_task}")

@@ -103,8 +103,10 @@ class ErrorFeedbackCompressor:
         # Add accumulated residuals from previous rounds
         if self.residuals is not None:
             gradients = [
-                g + r for g, r in zip(gradients, self.residuals)
+                g.copy() + r for g, r in zip(gradients, self.residuals)
             ]
+        else:
+            gradients = [g.copy() for g in gradients]
         
         # Apply Top-K compression
         compressed, stats = topk_compress(gradients, self.k_ratio)
@@ -188,7 +190,7 @@ def run_compression_sweep(
         results.append(stats)
         
         logger.info(
-            f"  k_ratio={kr:.2f} → "
+            f"  k_ratio={kr:.2f} -> "
             f"savings={stats['savings_pct']:.1f}%, "
             f"MSE={mse:.6f}"
         )

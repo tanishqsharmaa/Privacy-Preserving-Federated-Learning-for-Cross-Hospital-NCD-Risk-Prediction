@@ -58,7 +58,7 @@ class PrivacyAccountant:
             self.budget_exceeded = True
             logger.warning(
                 f"Privacy budget EXCEEDED at round {fl_round}: "
-                f"ε={epsilon:.4f} >= max_ε={self.max_epsilon}"
+                f"eps={epsilon:.4f} >= max_eps={self.max_epsilon}"
             )
     
     def should_stop(self) -> bool:
@@ -111,7 +111,7 @@ def setup_dp_training(
         # Fix incompatible layers (BatchNorm → GroupNorm)
         if not ModuleValidator.is_valid(model):
             model = ModuleValidator.fix(model)
-            logger.info("Fixed model for Opacus compatibility (BatchNorm → GroupNorm)")
+            logger.info("Fixed model for Opacus compatibility (BatchNorm -> GroupNorm)")
         
         privacy_engine = PrivacyEngine(accountant="rdp")
         
@@ -124,7 +124,7 @@ def setup_dp_training(
         )
         
         logger.info(
-            f"DP-SGD enabled: σ={noise_multiplier}, C={max_grad_norm}, δ={delta}"
+            f"DP-SGD enabled: sigma={noise_multiplier}, C={max_grad_norm}, delta={delta}"
         )
         
         return model, optimizer, data_loader, privacy_engine
@@ -231,8 +231,8 @@ def noise_calibration_report(
             "within_budget": eps <= 3.0,
         })
         logger.info(
-            f"  σ={sigma:.1f} → ε≈{eps:.4f} "
-            f"({'✓ within budget' if eps <= 3.0 else '✗ EXCEEDS budget'})"
+            f"  sigma={sigma:.1f} -> eps~{eps:.4f} "
+            f"({'within budget' if eps <= 3.0 else 'EXCEEDS budget'})"
         )
     
     return results

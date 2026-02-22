@@ -10,7 +10,7 @@ Orchestrates all 5 baselines:
 
 Also runs:
 - Privacy-utility tradeoff sweep
-- Non-IID robustness sweep (α values)
+- Non-IID robustness sweep (alpha values)
 - Compression efficiency sweep (k_ratio values)
 - Attack simulations
 - Fairness analysis
@@ -167,7 +167,7 @@ def run_all_experiments(
         auc_per_disease = {d: [] for d in DISEASE_NAMES}
         
         for sigma in noise_multipliers:
-            logger.info(f"\n  Running with σ={sigma}...")
+            logger.info(f"\n  Running with sigma={sigma}...")
             sweep_config = ExperimentConfig()
             sweep_config.fl.num_rounds = num_rounds
             sweep_config.fl.num_clients = num_clients
@@ -198,7 +198,7 @@ def run_all_experiments(
     # ================================================================
     if not quick_mode:
         logger.info("\n" + "=" * 70)
-        logger.info("SWEEP: NON-IID ROBUSTNESS (α values)")
+        logger.info("SWEEP: NON-IID ROBUSTNESS (alpha values)")
         logger.info("=" * 70)
         
         alphas = [0.1, 0.5, 1.0]
@@ -206,7 +206,7 @@ def run_all_experiments(
         fedprox_scores = []
         
         for alpha in alphas:
-            logger.info(f"\n  α={alpha}...")
+            logger.info(f"\n  alpha={alpha}...")
             
             # FedAvg
             _, fa_strat = run_fedavg_baseline(

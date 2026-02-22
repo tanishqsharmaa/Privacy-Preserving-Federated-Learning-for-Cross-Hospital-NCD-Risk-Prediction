@@ -324,7 +324,7 @@ def plot_noniid_robustness(
     fedprox_scores: List[float],
     save_path: str = "results/noniid_robustness.png"
 ):
-    """Plot accuracy vs. Dirichlet α for FedAvg vs FedProx."""
+    """Plot accuracy vs. Dirichlet alpha for FedAvg vs FedProx."""
     set_plot_style()
     fig, ax = plt.subplots(figsize=(8, 5))
     
@@ -333,7 +333,7 @@ def plot_noniid_robustness(
     ax.plot(alphas, fedprox_scores, "s-", color="#4CAF50", label="FedProx",
             linewidth=2, markersize=8)
     
-    ax.set_xlabel("Dirichlet α (higher = more IID)")
+    ax.set_xlabel("Dirichlet alpha (higher = more IID)")
     ax.set_ylabel("AUC-ROC (Macro Avg)")
     ax.set_title("Non-IID Robustness: FedAvg vs. FedProx")
     ax.legend()

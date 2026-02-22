@@ -16,6 +16,7 @@ import argparse
 import logging
 import numpy as np
 import pandas as pd
+import joblib
 from typing import Dict, List, Optional, Tuple
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.model_selection import train_test_split
@@ -45,6 +46,7 @@ BRFSS_FEATURE_MAP = {
 }
 
 # NHANES variable name → harmonized name
+# Supports both pre-2021 (BPXSY1) and 2021-2023 (BPXOSY1) variable names
 NHANES_FEATURE_MAP = {
     "RIDAGEYR": "age",
     "RIAGENDR": "sex",
@@ -53,12 +55,22 @@ NHANES_FEATURE_MAP = {
     "SMQ020": "smoking_status",
     "ALQ130": "alcohol_consumption",
     "PAQ605": "physical_activity",
-    "BPXSY1": "blood_pressure_systolic",
-    "BPXDI1": "blood_pressure_diastolic",
+    "BPXSY1": "blood_pressure_systolic",     # pre-2021
+    "BPXDI1": "blood_pressure_diastolic",    # pre-2021
+    "BPXOSY1": "blood_pressure_systolic",    # 2021-2023 (oscillometric)
+    "BPXODI1": "blood_pressure_diastolic",   # 2021-2023 (oscillometric)
     "LBXTC": "cholesterol_total",
     "LBDHDD": "cholesterol_hdl",
     "LBXGLU": "blood_glucose",
     "DIQ010": "diabetes",
+    # Medical Conditions Questionnaire (MCQ)
+    "MCQ160B": "has_chf",                     # congestive heart failure
+    "MCQ160C": "has_coronary_hd",              # coronary heart disease
+    "MCQ160D": "has_angina",                   # angina
+    "MCQ160E": "has_heart_attack",             # heart attack
+    "MCQ160F": "has_stroke_history",           # stroke
+    "KIQ022": "has_kidney_disease",            # kidney disease
+    "MCQ195": "has_arthritis",                 # arthritis
 }
 
 # Harmonized feature list
@@ -259,16 +271,32 @@ def load_nhanes(data_dir: str) -> pd.DataFrame:
     else:
         df_harmonized["hypertension"] = 0.0
     
-    # CVD — NHANES doesn't have a direct CVD variable; derive from risk factors
+    # CVD — derive from MCQ variables if available, else from risk factors
     if "cardiovascular_disease" not in df_harmonized.columns:
-        # Simple derivation based on clinical thresholds
-        cvd_risk = (
-            (df_harmonized.get("blood_pressure_systolic", pd.Series(0)) >= 160).astype(float) * 0.3
-            + (df_harmonized.get("cholesterol_total", pd.Series(0)) >= 240).astype(float) * 0.3
-            + (df_harmonized.get("smoking_status", pd.Series(0)) >= 2).astype(float) * 0.2
-            + (df_harmonized.get("age", pd.Series(0)) >= 60).astype(float) * 0.2
-        )
-        df_harmonized["cardiovascular_disease"] = (cvd_risk >= 0.5).astype(float)
+        # Try MCQ-based CVD (CHF, coronary HD, angina, heart attack)
+        mcq_cvd_cols = ["has_chf", "has_coronary_hd", "has_angina", "has_heart_attack"]
+        has_mcq = any(c in df_harmonized.columns for c in mcq_cvd_cols)
+        
+        if has_mcq:
+            cvd_flag = pd.Series(0.0, index=df_harmonized.index)
+            for col in mcq_cvd_cols:
+                if col in df_harmonized.columns:
+                    cvd_flag = cvd_flag | (df_harmonized[col] == 1)
+            df_harmonized["cardiovascular_disease"] = cvd_flag.astype(float)
+        else:
+            # Fallback: derive from clinical thresholds
+            cvd_risk = (
+                (df_harmonized.get("blood_pressure_systolic", pd.Series(0)) >= 160).astype(float) * 0.3
+                + (df_harmonized.get("cholesterol_total", pd.Series(0)) >= 240).astype(float) * 0.3
+                + (df_harmonized.get("smoking_status", pd.Series(0)) >= 2).astype(float) * 0.2
+                + (df_harmonized.get("age", pd.Series(0)) >= 60).astype(float) * 0.2
+            )
+            df_harmonized["cardiovascular_disease"] = (cvd_risk >= 0.5).astype(float)
+    
+    # Convert MCQ binary responses (1=Yes, 2=No) to 0/1
+    for col in ["has_kidney_disease", "has_stroke_history", "has_arthritis"]:
+        if col in df_harmonized.columns:
+            df_harmonized[col] = (df_harmonized[col] == 1).astype(float)
     
     # Fill missing
     for col in HARMONIZED_FEATURES:
@@ -424,7 +452,6 @@ def prepare_dataset(
     test_df.to_csv(os.path.join(output_dir, "test.csv"), index=False)
     
     # Save scaler for later use
-    import joblib
     joblib.dump(scaler, os.path.join(output_dir, "scaler.pkl"))
     
     logger.info(f"Saved {len(train_df)} train, {len(test_df)} test samples to {output_dir}")

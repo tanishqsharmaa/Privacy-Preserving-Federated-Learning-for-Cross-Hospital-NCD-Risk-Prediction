@@ -9,6 +9,7 @@ Shows attacks succeed without DP and fail with DP.
 """
 
 import os
+import json
 import logging
 import numpy as np
 import torch
@@ -217,7 +218,7 @@ def run_gradient_inversion_experiment(
     results = {}
     
     for sigma in noise_multipliers:
-        logger.info(f"  Gradient inversion attack with σ={sigma}...")
+        logger.info(f"  Gradient inversion attack with sigma={sigma}...")
         
         if sigma > 0:
             noisy_gradient = attacker.add_dp_noise(true_gradient, sigma, max_grad_norm)
@@ -244,12 +245,11 @@ def run_gradient_inversion_experiment(
         }
         
         logger.info(
-            f"    σ={sigma} → PSNR={psnr:.2f} dB | "
-            f"{'✗ Attack succeeds' if psnr > 15 else '✓ Defense works'}"
+            f"    sigma={sigma} -> PSNR={psnr:.2f} dB | "
+            f"{'[X] Attack succeeds' if psnr > 15 else '[OK] Defense works'}"
         )
     
     # Save results
-    import json
     filepath = os.path.join(results_dir, "gradient_inversion_results.json")
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     with open(filepath, "w") as f:
@@ -440,7 +440,7 @@ def run_membership_inference_experiment(
     logger.info(
         f"  MI Attack Accuracy: {metrics['attack_accuracy']:.2%} | "
         f"AUC: {metrics['attack_auc']:.4f} | "
-        f"{'✓ Near random (good privacy)' if metrics['near_random'] else '✗ Leaking info'}"
+        f"{'[OK] Near random (good privacy)' if metrics['near_random'] else '[X] Leaking info'}"
     )
     
     # Save results
@@ -499,7 +499,6 @@ def run_all_attacks(
     results["membership_inference"] = mi_results
     
     # Save combined results
-    import json
     filepath = os.path.join(results_dir, "attack_results.json")
     with open(filepath, "w") as f:
         json.dump(results, f, indent=2)

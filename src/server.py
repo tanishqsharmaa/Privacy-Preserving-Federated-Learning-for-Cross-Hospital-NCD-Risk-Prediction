@@ -46,7 +46,7 @@ class FedProxStrategy(FedAvg):
     The proximal term is applied client-side (in client.py). Server-side,
     FedProx uses the same weighted averaging as FedAvg. The key difference
     is that the server broadcasts the current global model each round,
-    and clients use it as the anchpr for the proximal penalty.
+    and clients use it as the anchor for the proximal penalty.
     
     Additionally:
     - Logs per-round metrics
@@ -85,6 +85,11 @@ class FedProxStrategy(FedAvg):
         self.round_metrics: List[Dict] = []
         self.best_auc = 0.0
         self.best_round = 0
+        
+        # Early stopping
+        self.early_stop_patience = getattr(self.config.fl, 'early_stop_patience', 10)
+        self._rounds_without_improvement = 0
+        self.should_stop = False
         
         # Results directory
         self.results_dir = self.config.results_dir
@@ -148,17 +153,26 @@ class FedProxStrategy(FedAvg):
         }
         self.round_metrics.append(round_info)
         
-        # Track best model
+        # Track best model and early stopping
         macro_auc = test_metrics.get("macro_avg_auc_roc", 0)
         if macro_auc > self.best_auc:
             self.best_auc = macro_auc
             self.best_round = server_round
+            self._rounds_without_improvement = 0
             self._save_model(parameters_aggregated, "best_model.pth")
+        else:
+            self._rounds_without_improvement += 1
+            if self._rounds_without_improvement >= self.early_stop_patience:
+                logger.info(
+                    f"Early stopping triggered: no improvement for "
+                    f"{self.early_stop_patience} rounds (best AUC={self.best_auc:.4f} at round {self.best_round})"
+                )
+                self.should_stop = True
         
         logger.info(
             f"Round {server_round:3d} | "
             f"Loss={avg_train_loss:.4f} | "
-            f"ε_avg={avg_epsilon:.4f} | ε_max={max_epsilon:.4f} | "
+            f"eps_avg={avg_epsilon:.4f} | eps_max={max_epsilon:.4f} | "
             f"Test AUC={macro_auc:.4f}"
         )
         
@@ -169,7 +183,7 @@ class FedProxStrategy(FedAvg):
         return parameters_aggregated, {**metrics_aggregated, **test_metrics}
     
     def _evaluate_global(self, parameters: Parameters) -> Dict[str, float]:
-        """Evaluate global model on test data."""
+        """Evaluate global model on test data (batched to avoid OOM)."""
         if self.test_data is None:
             return {}
         
@@ -179,17 +193,25 @@ class FedProxStrategy(FedAvg):
         params = parameters_to_ndarrays(parameters)
         params_dict = zip(self.model.state_dict().keys(), params)
         state_dict = OrderedDict(
-            {k: torch.tensor(v, dtype=torch.float32) for k, v in params_dict}
+            {k: torch.from_numpy(v).float() for k, v in params_dict}
         )
         self.model.load_state_dict(state_dict, strict=True)
         self.model.to(self.device)
         self.model.eval()
         
-        # Forward pass
+        # Batched forward pass to avoid OOM on large test sets
+        batch_size = 512
+        all_preds = [[] for _ in range(3)]
+        
         with torch.no_grad():
-            X_tensor = torch.FloatTensor(X_test).to(self.device)
-            preds = self.model(X_tensor)
-            preds_np = [p.cpu().numpy().flatten() for p in preds]
+            for start in range(0, len(X_test), batch_size):
+                end = min(start + batch_size, len(X_test))
+                X_batch = torch.FloatTensor(X_test[start:end]).to(self.device)
+                preds = self.model(X_batch)
+                for i, p in enumerate(preds):
+                    all_preds[i].append(p.cpu().numpy().flatten())
+        
+        preds_np = [np.concatenate(task_preds) for task_preds in all_preds]
         
         # Compute metrics
         y_true_list = [Y_test[:, i] for i in range(3)]
@@ -235,10 +257,15 @@ def prepare_data_for_fl(
         (client_data_list, test_data, input_dim)
     """
     from src.data_prep import prepare_dataset, HARMONIZED_FEATURES, TARGET_COLUMNS
-    from src.partition import partition_by_source, load_partitions
+    from src.partition import partition_by_source
     
     processed_dir = config.data.processed_dir
     partitions_dir = config.data.partitions_dir
+    
+    # Dynamically split clients across sources
+    num_clients = config.fl.num_clients
+    num_brfss = max(1, num_clients // 2)
+    num_nhanes = num_clients - num_brfss
     
     # Step 1: Prepare data if not already done
     train_path = os.path.join(processed_dir, "train.csv")
@@ -256,29 +283,21 @@ def prepare_data_for_fl(
     
     train_df = pd.read_csv(train_path)
     test_df = pd.read_csv(test_path)
+    train_df = train_df.reset_index(drop=True)  # Ensure 0-based integer index
     
     input_dim = len(HARMONIZED_FEATURES)
+    n_train = len(train_df)
     
-    # Step 2: Partition if not already done
-    partition_file = os.path.join(
-        partitions_dir, f"client_0_alpha{config.fl.dirichlet_alpha}.npy"
-    )
+    # Step 2: Partition — always regenerate to match current config
+    logger.info(f"Partitioning {n_train} samples into {num_clients} clients "
+                f"(BRFSS={num_brfss}, NHANES={num_nhanes}, alpha={config.fl.dirichlet_alpha})")
     
-    if not os.path.exists(partition_file):
-        logger.info("Partitions not found. Running partitioning...")
-        partitions = partition_by_source(
-            train_df,
-            num_brfss_clients=config.fl.num_brfss_clients,
-            num_nhanes_clients=config.fl.num_nhanes_clients,
-            alpha=config.fl.dirichlet_alpha,
-            seed=config.seed,
-        )
-        from src.partition import save_partitions
-        save_partitions(partitions, partitions_dir, config.fl.dirichlet_alpha)
-    
-    # Load partitions
-    partitions = load_partitions(
-        partitions_dir, config.fl.dirichlet_alpha, config.fl.num_clients
+    partitions = partition_by_source(
+        train_df,
+        num_brfss_clients=num_brfss,
+        num_nhanes_clients=num_nhanes,
+        alpha=config.fl.dirichlet_alpha,
+        seed=config.seed,
     )
     
     # Step 3: Create per-client datasets
@@ -287,9 +306,11 @@ def prepare_data_for_fl(
     
     client_data = []
     for cid, indices in enumerate(partitions):
+        # Validate indices are within bounds
+        indices = [i for i in indices if 0 <= i < n_train]
+        
         if len(indices) == 0:
             logger.warning(f"Client {cid} has no data!")
-            # Create minimal dummy data
             client_data.append((
                 np.zeros((1, input_dim), dtype=np.float32),
                 np.zeros((1, 3), dtype=np.float32)

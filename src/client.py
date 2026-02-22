@@ -16,6 +16,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from typing import Dict, List, Optional, Tuple
 from collections import OrderedDict
+from sklearn.metrics import roc_auc_score
 
 import flwr as fl
 from flwr.common import NDArrays, Scalar
@@ -108,9 +109,12 @@ class NCDClient(fl.client.NumPyClient):
             )
             self.val_loader = DataLoader(val_dataset, batch_size=batch_size)
         
-        # Optimizer
+        # Optimizer and LR scheduler
         self.optimizer = torch.optim.Adam(
             self.model.parameters(), lr=learning_rate
+        )
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=50, eta_min=learning_rate * 0.01
         )
         
         # Privacy
@@ -126,7 +130,7 @@ class NCDClient(fl.client.NumPyClient):
                         self.model, self.optimizer, self.train_loader,
                         noise_multiplier, max_grad_norm, dp_delta
                     )
-                logger.info(f"Client {client_id}: DP-SGD enabled (σ={noise_multiplier})")
+                logger.info(f"Client {client_id}: DP-SGD enabled (sigma={noise_multiplier})")
             except Exception as e:
                 logger.warning(f"Client {client_id}: DP setup failed: {e}. Running without DP.")
                 self.enable_dp = False
@@ -138,8 +142,10 @@ class NCDClient(fl.client.NumPyClient):
         self.loss_fn = MultiTaskLoss()
         self.fedprox_loss_fn = FedProxLoss(mu=fedprox_mu)
         
-        # Track global model parameters for FedProx
+        # Track global model parameters for FedProx proximal term
         self.global_params: Optional[List[torch.Tensor]] = None
+        # Track global state_dict as numpy for compression delta computation
+        self._global_state_np: Optional[List[np.ndarray]] = None
         
         # Metrics
         self.round_metrics: Dict = {}
@@ -152,31 +158,62 @@ class NCDClient(fl.client.NumPyClient):
         )
     
     def get_parameters(self, config: Dict = None) -> NDArrays:
-        """Return model parameters as NumPy arrays."""
+        """Return model parameters as NumPy arrays, optionally compressed."""
         params = [
             val.cpu().numpy()
             for _, val in self.model.state_dict().items()
         ]
         
-        # Apply compression if enabled
-        if self.enable_compression and self.compressor is not None:
-            params, comp_stats = self.compressor.compress(params)
-            self.round_metrics["compression"] = comp_stats
+        # Apply compression on weight deltas if enabled
+        if self.enable_compression and self.compressor is not None and self._global_state_np is not None:
+            # Safety check: ensure shapes match (Opacus can change model architecture)
+            if len(params) == len(self._global_state_np) and all(
+                p.shape == g.shape for p, g in zip(params, self._global_state_np)
+            ):
+                # Compute deltas (current - global)
+                deltas = [p - g for p, g in zip(params, self._global_state_np)]
+                compressed_deltas, comp_stats = self.compressor.compress(deltas)
+                # Reconstruct params = global + compressed_delta
+                params = [g + d for g, d in zip(self._global_state_np, compressed_deltas)]
+                self.round_metrics["compression"] = comp_stats
+            else:
+                logger.warning(
+                    f"Client {self.client_id}: shape mismatch between model and global params, "
+                    f"skipping compression for this round."
+                )
         
         return params
     
     def set_parameters(self, parameters: NDArrays):
         """Set model parameters from NumPy arrays."""
-        params_dict = zip(self.model.state_dict().keys(), parameters)
-        state_dict = OrderedDict(
-            {k: torch.tensor(v, dtype=torch.float32) for k, v in params_dict}
-        )
-        self.model.load_state_dict(state_dict, strict=True)
+        model_keys = list(self.model.state_dict().keys())
         
-        # Store as global params for FedProx
+        # Handle case where Opacus changed model architecture:
+        # The server sends params for the original model, but Opacus may have
+        # replaced layers (e.g., BatchNorm -> GroupNorm), changing param count.
+        if len(parameters) != len(model_keys):
+            logger.warning(
+                f"Client {self.client_id}: param count mismatch "
+                f"(received {len(parameters)}, model has {len(model_keys)}). "
+                f"Skipping load — using current model weights."
+            )
+        else:
+            params_dict = zip(model_keys, parameters)
+            state_dict = OrderedDict(
+                {k: torch.from_numpy(v).float() for k, v in params_dict}
+            )
+            self.model.load_state_dict(state_dict, strict=True)
+        
+        # Store global params for FedProx proximal term (model.parameters() order)
         self.global_params = [
             p.clone().detach().to(self.device)
             for p in self.model.parameters()
+        ]
+        
+        # Store global state as numpy for compression delta computation
+        self._global_state_np = [
+            val.cpu().numpy().copy()
+            for val in self.model.state_dict().values()
         ]
     
     def fit(
@@ -246,6 +283,10 @@ class NCDClient(fl.client.NumPyClient):
         
         # Collect metrics
         avg_loss = float(np.mean(epoch_losses))
+        
+        # Step the learning rate scheduler
+        self.scheduler.step()
+        
         self.round_metrics.update({
             "client_id": self.client_id,
             "round": current_round,
@@ -262,7 +303,7 @@ class NCDClient(fl.client.NumPyClient):
         
         logger.info(
             f"Client {self.client_id} | Round {current_round} | "
-            f"Loss={avg_loss:.4f} | ε={epsilon:.4f}"
+            f"Loss={avg_loss:.4f} | eps={epsilon:.4f}"
         )
         
         return self.get_parameters(), len(self.train_dataset), metrics
@@ -310,7 +351,6 @@ class NCDClient(fl.client.NumPyClient):
             y_pred = np.concatenate(all_preds[i]).flatten()
             
             if len(np.unique(y_true)) > 1:
-                from sklearn.metrics import roc_auc_score
                 metrics[f"auc_{name}"] = float(roc_auc_score(y_true, y_pred))
             else:
                 metrics[f"auc_{name}"] = 0.0

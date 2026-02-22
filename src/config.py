@@ -71,6 +71,9 @@ class FLConfig:
     # FedProx
     fedprox_mu: float = 0.01  # proximal term weight
     
+    # Early stopping
+    early_stop_patience: int = 10  # stop if no AUC improvement for N rounds
+    
     # Dirichlet partitioning
     dirichlet_alpha: float = 0.5
     num_brfss_clients: int = 5

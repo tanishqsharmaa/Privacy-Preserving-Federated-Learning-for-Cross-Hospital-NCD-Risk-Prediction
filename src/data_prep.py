@@ -29,20 +29,26 @@ logger = logging.getLogger("ppfl-ncd.data_prep")
 # ============================================================================
 
 # BRFSS variable name → harmonized name
+# Updated for BRFSS 2022 (LLCP2022) variable naming conventions.
+# Note: BRFSS 2022 does NOT have actual BP/cholesterol measurements —
+#       those features will be NaN and filled via median imputation.
 BRFSS_FEATURE_MAP = {
     "_AGEG5YR": "age",
-    "SEX": "sex",
+    "_SEX": "sex",                              # 2022 uses _SEX (not SEX)
+    "SEXVAR": "sex",                             # fallback
     "_BMI5": "bmi",
-    "_RACE": "race_ethnicity",
+    "_IMPRACE": "race_ethnicity",               # 2022 uses _IMPRACE (not _RACE)
+    "_RACE1": "race_ethnicity",                 # fallback
     "_SMOKER3": "smoking_status",
-    "ALCDAY5": "alcohol_consumption",
+    "ALCDAY4": "alcohol_consumption",           # 2022 uses ALCDAY4 (not ALCDAY5)
     "_TOTINDA": "physical_activity",
-    "BPHIGH6": "blood_pressure_systolic",   # proxy
-    "TOLDHI3": "cholesterol_total",          # proxy (told high cholesterol)
-    "_CHOLCH3": "cholesterol_hdl",           # proxy
     "DIABETE4": "diabetes",
     # Derived targets
-    "_MICHD": "cardiovascular_disease",
+    "_MICHD": "cardiovascular_disease",         # 1=had MI or CHD, 2=no
+    # Comorbidities (available in BRFSS 2022)
+    "CVDSTRK3": "has_stroke_history",           # 1=yes, 2=no
+    "CHCKDNY2": "has_kidney_disease",           # 1=yes, 2=no
+    "HAVARTH4": "has_arthritis",                # 1=yes, 2=no
 }
 
 # NHANES variable name → harmonized name
@@ -54,23 +60,24 @@ NHANES_FEATURE_MAP = {
     "RIDRETH1": "race_ethnicity",
     "SMQ020": "smoking_status",
     "ALQ130": "alcohol_consumption",
-    "PAQ605": "physical_activity",
-    "BPXSY1": "blood_pressure_systolic",     # pre-2021
-    "BPXDI1": "blood_pressure_diastolic",    # pre-2021
-    "BPXOSY1": "blood_pressure_systolic",    # 2021-2023 (oscillometric)
-    "BPXODI1": "blood_pressure_diastolic",   # 2021-2023 (oscillometric)
+    "PAQ605": "physical_activity",              # pre-2021
+    "PAD680": "physical_activity",              # 2021-2023 (minutes sedentary)
+    "BPXSY1": "blood_pressure_systolic",        # pre-2021
+    "BPXDI1": "blood_pressure_diastolic",       # pre-2021
+    "BPXOSY1": "blood_pressure_systolic",       # 2021-2023 (oscillometric)
+    "BPXODI1": "blood_pressure_diastolic",      # 2021-2023 (oscillometric)
     "LBXTC": "cholesterol_total",
     "LBDHDD": "cholesterol_hdl",
     "LBXGLU": "blood_glucose",
     "DIQ010": "diabetes",
     # Medical Conditions Questionnaire (MCQ)
-    "MCQ160B": "has_chf",                     # congestive heart failure
-    "MCQ160C": "has_coronary_hd",              # coronary heart disease
-    "MCQ160D": "has_angina",                   # angina
-    "MCQ160E": "has_heart_attack",             # heart attack
-    "MCQ160F": "has_stroke_history",           # stroke
-    "KIQ022": "has_kidney_disease",            # kidney disease
-    "MCQ195": "has_arthritis",                 # arthritis
+    "MCQ160B": "has_chf",                        # congestive heart failure
+    "MCQ160C": "has_coronary_hd",                # coronary heart disease
+    "MCQ160D": "has_angina",                     # angina
+    "MCQ160E": "has_heart_attack",               # heart attack
+    "MCQ160F": "has_stroke_history",             # stroke
+    "KIQ022": "has_kidney_disease",              # kidney disease
+    "MCQ195": "has_arthritis",                   # arthritis
 }
 
 # Harmonized feature list
@@ -190,33 +197,87 @@ def load_brfss(filepath: str) -> pd.DataFrame:
     else:
         raise ValueError(f"Unsupported file format: {filepath}")
     
-    # Select and rename features
-    available_cols = {k: v for k, v in BRFSS_FEATURE_MAP.items() if k in df.columns}
+    # Select and rename features (handle duplicate harmonized names by keeping first found)
+    available_cols = {}
+    seen_harmonized = set()
+    for k, v in BRFSS_FEATURE_MAP.items():
+        if k in df.columns and v not in seen_harmonized:
+            available_cols[k] = v
+            seen_harmonized.add(v)
+    
     df_harmonized = df[list(available_cols.keys())].rename(columns=available_cols)
     
     # Process BMI (BRFSS stores BMI * 100)
     if "bmi" in df_harmonized.columns:
         df_harmonized["bmi"] = df_harmonized["bmi"] / 100.0
     
-    # Create binary diabetes target (DIABETE4: 1=Yes)
+    # Process sex: BRFSS _SEX uses 1=Male, 2=Female → convert to 0/1
+    if "sex" in df_harmonized.columns:
+        df_harmonized["sex"] = (df_harmonized["sex"] == 1).astype(float)  # 1=male→1, 2=female→0
+    
+    # Process age: _AGEG5YR is category 1-14, convert to approximate midpoint age
+    if "age" in df_harmonized.columns:
+        # Categories: 1=18-24, 2=25-29, ..., 13=80+, 14=don't know
+        age_midpoints = {1: 21, 2: 27, 3: 32, 4: 37, 5: 42, 6: 47, 7: 52,
+                         8: 57, 9: 62, 10: 67, 11: 72, 12: 77, 13: 82, 14: np.nan}
+        df_harmonized["age"] = df_harmonized["age"].map(age_midpoints)
+    
+    # Process smoking: _SMOKER3 (1=daily, 2=some days, 3=former, 4=never, 9=DK)
+    if "smoking_status" in df_harmonized.columns:
+        smoke_map = {1: 2.0, 2: 2.0, 3: 1.0, 4: 0.0, 9: np.nan}
+        df_harmonized["smoking_status"] = df_harmonized["smoking_status"].map(smoke_map)
+    
+    # Process alcohol: ALCDAY4 is coded (1xx=days/week, 2xx=days/month, 888=none, 777/999=DK)
+    if "alcohol_consumption" in df_harmonized.columns:
+        def decode_alcday(v):
+            if pd.isna(v) or v in (777, 999):
+                return np.nan
+            if v == 888:
+                return 0.0
+            v = int(v)
+            if 100 <= v <= 199:
+                return float(v - 100)  # days per week
+            elif 200 <= v <= 299:
+                return float(v - 200) / 4.3  # days per month → approx per week
+            return np.nan
+        df_harmonized["alcohol_consumption"] = df_harmonized["alcohol_consumption"].apply(decode_alcday)
+    
+    # Process physical activity: _TOTINDA (1=active, 2=inactive, 9=DK)
+    if "physical_activity" in df_harmonized.columns:
+        pa_map = {1: 1.0, 2: 0.0, 9: np.nan}
+        df_harmonized["physical_activity"] = df_harmonized["physical_activity"].map(pa_map)
+    
+    # Process race: _IMPRACE (1=White, 2=Black, 3=Asian, 4=AI/AN, 5=Hispanic, 6=Other)
+    if "race_ethnicity" in df_harmonized.columns:
+        # Keep as numeric category (0-indexed)
+        df_harmonized["race_ethnicity"] = df_harmonized["race_ethnicity"] - 1
+    
+    # Create binary diabetes target (DIABETE4: 1=Yes, others=No)
     if "diabetes" in df_harmonized.columns:
         df_harmonized["diabetes"] = (df_harmonized["diabetes"] == 1).astype(float)
     
-    # Create hypertension target from blood pressure proxy
-    if "blood_pressure_systolic" in df_harmonized.columns:
-        df_harmonized["hypertension"] = (
-            df_harmonized["blood_pressure_systolic"] == 1
-        ).astype(float)
+    # Derive hypertension: BRFSS 2022 doesn't have BP measurements
+    # Use related variables if available, else mark as NaN for imputation
+    if "_RFHYPE6" in df.columns:
+        # _RFHYPE6: 1=No, 2=Yes → invert
+        df_harmonized["hypertension"] = (df["_RFHYPE6"] == 2).astype(float)
     else:
-        df_harmonized["hypertension"] = 0.0
+        # No direct hypertension variable — will be NaN, filled later
+        df_harmonized["hypertension"] = np.nan
+        logger.warning("BRFSS: No hypertension variable found. Will use NaN.")
     
-    # CVD target
+    # CVD target: _MICHD (1=yes, 2=no)
     if "cardiovascular_disease" in df_harmonized.columns:
         df_harmonized["cardiovascular_disease"] = (
             df_harmonized["cardiovascular_disease"] == 1
         ).astype(float)
     
-    # Fill missing harmonized features
+    # Convert comorbidity binary responses (1=Yes, 2=No, 7=DK, 9=Refused) → 0/1
+    for col in ["has_kidney_disease", "has_stroke_history", "has_arthritis"]:
+        if col in df_harmonized.columns:
+            df_harmonized[col] = (df_harmonized[col] == 1).astype(float)
+    
+    # Fill missing harmonized features with NaN
     for col in HARMONIZED_FEATURES:
         if col not in df_harmonized.columns:
             df_harmonized[col] = np.nan
@@ -254,31 +315,58 @@ def load_nhanes(data_dir: str) -> pd.DataFrame:
             # Drop duplicate columns
             df = df[[c for c in df.columns if not c.endswith("_dup")]]
     
-    # Select and rename
-    available_cols = {k: v for k, v in NHANES_FEATURE_MAP.items() if k in df.columns}
+    # Select and rename (handle duplicate harmonized names by keeping first found)
+    available_cols = {}
+    seen_harmonized = set()
+    for k, v in NHANES_FEATURE_MAP.items():
+        if k in df.columns and v not in seen_harmonized:
+            available_cols[k] = v
+            seen_harmonized.add(v)
+    
     df_harmonized = df[list(available_cols.keys())].rename(columns=available_cols)
+    
+    # Process sex: RIAGENDR (1=Male, 2=Female) → 0/1
+    if "sex" in df_harmonized.columns:
+        df_harmonized["sex"] = (df_harmonized["sex"] == 1).astype(float)
+    
+    # Process smoking: SMQ020 (1=Yes ever smoked, 2=No, 7=Refused, 9=DK)
+    if "smoking_status" in df_harmonized.columns:
+        smoke_map = {1.0: 2.0, 2.0: 0.0, 7.0: np.nan, 9.0: np.nan}
+        df_harmonized["smoking_status"] = df_harmonized["smoking_status"].map(smoke_map)
+    
+    # Process physical activity: PAD680 = sedentary minutes/day → invert to binary
+    if "physical_activity" in df_harmonized.columns:
+        pa = df_harmonized["physical_activity"]
+        # Handle special codes: 7777=Refused, 9999=DK, 9999+=invalid
+        pa = pa.where(pa < 1440, np.nan)  # max minutes in a day
+        # Active = less than 480 min (8 hours) sedentary
+        df_harmonized["physical_activity"] = (pa < 480).astype(float)
+        df_harmonized.loc[pa.isna(), "physical_activity"] = np.nan
     
     # Create binary diabetes target (DIQ010: 1=Yes)
     if "diabetes" in df_harmonized.columns:
         df_harmonized["diabetes"] = (df_harmonized["diabetes"] == 1).astype(float)
     
-    # Derive hypertension from blood pressure
+    # Derive hypertension from blood pressure measurements
     if "blood_pressure_systolic" in df_harmonized.columns:
-        df_harmonized["hypertension"] = (
-            (df_harmonized["blood_pressure_systolic"] >= 140) | 
-            (df_harmonized.get("blood_pressure_diastolic", pd.Series(0)) >= 90)
-        ).astype(float)
+        bp_sys = df_harmonized["blood_pressure_systolic"]
+        bp_dia = df_harmonized.get("blood_pressure_diastolic", pd.Series(dtype=float))
+        hyper = (bp_sys >= 140)
+        if len(bp_dia) > 0:
+            hyper = hyper | (bp_dia >= 90)
+        df_harmonized["hypertension"] = hyper.astype(float)
+        # Keep NaN where BP is missing
+        df_harmonized.loc[bp_sys.isna(), "hypertension"] = np.nan
     else:
-        df_harmonized["hypertension"] = 0.0
+        df_harmonized["hypertension"] = np.nan
     
-    # CVD — derive from MCQ variables if available, else from risk factors
+    # CVD — derive from MCQ variables (1=Yes, 2=No response coding)
     if "cardiovascular_disease" not in df_harmonized.columns:
-        # Try MCQ-based CVD (CHF, coronary HD, angina, heart attack)
         mcq_cvd_cols = ["has_chf", "has_coronary_hd", "has_angina", "has_heart_attack"]
         has_mcq = any(c in df_harmonized.columns for c in mcq_cvd_cols)
         
         if has_mcq:
-            cvd_flag = pd.Series(0.0, index=df_harmonized.index)
+            cvd_flag = pd.Series(False, index=df_harmonized.index)
             for col in mcq_cvd_cols:
                 if col in df_harmonized.columns:
                     cvd_flag = cvd_flag | (df_harmonized[col] == 1)
@@ -362,9 +450,17 @@ def preprocess(
     else:
         df[available_continuous] = scaler.transform(df[available_continuous])
     
-    # Ensure targets are binary float
+    # Ensure targets are binary float, fill NaN targets with 0 (negative class)
+    # This handles cases like BRFSS 2022 having no hypertension variable
     for col in TARGET_COLUMNS:
         if col in df.columns:
+            nan_count = df[col].isna().sum()
+            if nan_count > 0:
+                logger.warning(
+                    f"Target '{col}' has {nan_count} NaN values "
+                    f"({nan_count/len(df):.1%}). Filling with 0 (negative class)."
+                )
+                df[col] = df[col].fillna(0.0)
             df[col] = df[col].astype(float)
     
     return df, scaler

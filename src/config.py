@@ -127,20 +127,6 @@ class ExplainabilityConfig:
 
 
 @dataclass
-class AttackConfig:
-    """Attack simulation configuration."""
-    # Gradient Inversion
-    enable_gradient_inversion: bool = True
-    gi_num_iterations: int = 300
-    gi_learning_rate: float = 0.1
-    
-    # Membership Inference
-    enable_membership_inference: bool = True
-    mi_num_shadow_models: int = 3
-    mi_attack_epochs: int = 20
-
-
-@dataclass
 class ExperimentConfig:
     """Overall experiment configuration."""
     data: DataConfig = field(default_factory=DataConfig)
@@ -149,8 +135,6 @@ class ExperimentConfig:
     privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
     compression: CompressionConfig = field(default_factory=CompressionConfig)
     explainability: ExplainabilityConfig = field(default_factory=ExplainabilityConfig)
-    attack: AttackConfig = field(default_factory=AttackConfig)
-    
     # General
     seed: int = 42
     device: str = "auto"  # "auto", "cpu", "cuda"

@@ -28,7 +28,7 @@ def run_fedavg_baseline(
     num_rounds: int = 50,
     num_clients: int = 10,
     alpha: float = 0.5,
-    use_synthetic: bool = True,
+    use_synthetic: bool = False,
     device: str = "auto",
     results_dir: str = "results/fedavg",
     seed: int = 42,
@@ -108,7 +108,7 @@ def run_fedavg_dp_baseline(
     num_clients: int = 10,
     alpha: float = 0.5,
     noise_multiplier: float = 1.1,
-    use_synthetic: bool = True,
+    use_synthetic: bool = False,
     device: str = "auto",
     results_dir: str = "results/fedavg_dp",
     seed: int = 42,
@@ -174,7 +174,7 @@ def run_local_only_baseline(
     num_epochs: int = 50,
     num_clients: int = 10,
     alpha: float = 0.5,
-    use_synthetic: bool = True,
+    use_synthetic: bool = False,
     device: str = "auto",
     results_dir: str = "results/local_only",
     seed: int = 42,
@@ -267,7 +267,7 @@ if __name__ == "__main__":
     parser.add_argument("--rounds", type=int, default=50)
     parser.add_argument("--clients", type=int, default=10)
     parser.add_argument("--alpha", type=float, default=0.5)
-    parser.add_argument("--synthetic", action="store_true", default=True)
+    parser.add_argument("--synthetic", action="store_true")
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()

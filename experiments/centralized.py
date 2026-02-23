@@ -35,7 +35,7 @@ def train_centralized(
     learning_rate: float = 0.001,
     hidden_dims: list = None,
     dropout: float = 0.3,
-    use_synthetic: bool = True,
+    use_synthetic: bool = False,
     synthetic_samples: int = 50000,
     device: str = "auto",
     results_dir: str = "results/centralized",
@@ -160,7 +160,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=0.001)
-    parser.add_argument("--synthetic", action="store_true", default=True)
+    parser.add_argument("--synthetic", action="store_true")
     parser.add_argument("--synthetic-samples", type=int, default=50000)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=42)

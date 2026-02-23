@@ -12,7 +12,6 @@ Also runs:
 - Privacy-utility tradeoff sweep
 - Non-IID robustness sweep (alpha values)
 - Compression efficiency sweep (k_ratio values)
-- Attack simulations
 - Fairness analysis
 - SHAP explainability
 
@@ -41,7 +40,7 @@ logger = logging.getLogger("ppfl-ncd.run_all")
 
 
 def run_all_experiments(
-    use_synthetic: bool = True,
+    use_synthetic: bool = False,
     device: str = "auto",
     seed: int = 42,
     quick_mode: bool = False,  # Reduced rounds for testing
@@ -176,7 +175,7 @@ def run_all_experiments(
             sweep_config.seed = seed
             sweep_config.results_dir = os.path.join(results_dir, f"sweep_sigma_{sigma}")
             
-            _, sweep_strategy = run_fl_simulation(sweep_config, use_synthetic=True)
+            _, sweep_strategy = run_fl_simulation(sweep_config, use_synthetic=use_synthetic)
             
             # Get final epsilon from round metrics
             if sweep_strategy.round_metrics:
@@ -211,7 +210,7 @@ def run_all_experiments(
             # FedAvg
             _, fa_strat = run_fedavg_baseline(
                 num_rounds=num_rounds, num_clients=num_clients,
-                alpha=alpha, use_synthetic=True, device=device, seed=seed,
+                alpha=alpha, use_synthetic=use_synthetic, device=device, seed=seed,
                 results_dir=os.path.join(results_dir, f"sweep_alpha_{alpha}_fedavg"),
             )
             fedavg_scores.append(fa_strat.best_auc)
@@ -227,52 +226,13 @@ def run_all_experiments(
             fp_config.seed = seed
             fp_config.results_dir = os.path.join(results_dir, f"sweep_alpha_{alpha}_fedprox")
             
-            _, fp_strat = run_fl_simulation(fp_config, use_synthetic=True)
+            _, fp_strat = run_fl_simulation(fp_config, use_synthetic=use_synthetic)
             fedprox_scores.append(fp_strat.best_auc)
         
         plot_noniid_robustness(
             alphas, fedavg_scores, fedprox_scores,
             save_path=os.path.join(results_dir, "noniid_robustness.png")
         )
-    
-    # ================================================================
-    # ATTACK SIMULATION
-    # ================================================================
-    logger.info("\n" + "=" * 70)
-    logger.info("ATTACK SIMULATION")
-    logger.info("=" * 70)
-    
-    from src.attack_sim import run_all_attacks
-    from src.data_prep import HARMONIZED_FEATURES, TARGET_COLUMNS
-    from src.server import prepare_data_for_fl
-    
-    attack_config = ExperimentConfig()
-    attack_config.fl.num_clients = num_clients
-    attack_config.device = device
-    client_data, test_data, input_dim = prepare_data_for_fl(
-        attack_config, use_synthetic=True
-    )
-    
-    # Load best model
-    model = torch.load(
-        os.path.join(results_dir, "full_system", "best_model.pth"),
-        map_location="cpu"
-    ) if os.path.exists(os.path.join(results_dir, "full_system", "best_model.pth")) else None
-    
-    if model is not None:
-        from src.model import MultiTaskNCD
-        attack_model = MultiTaskNCD(input_dim)
-        attack_model.load_state_dict(model)
-        
-        X_train_all = np.concatenate([x for x, _ in client_data])
-        Y_train_all = np.concatenate([y for _, y in client_data])
-        
-        attack_results = run_all_attacks(
-            attack_model, X_train_all, Y_train_all, test_data[0],
-            device=device,
-            results_dir=os.path.join(results_dir, "attacks"),
-        )
-        all_results["attacks"] = attack_results
     
     # ================================================================
     # SAVE FINAL COMPARISON
@@ -298,6 +258,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--quick", action="store_true",
                         help="Quick test mode (5 rounds, 3 clients)")
+    parser.add_argument("--synthetic", action="store_true",
+                        help="Use synthetic data instead of real BRFSS/NHANES")
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -305,7 +267,7 @@ if __name__ == "__main__":
     setup_logging("results")
     
     run_all_experiments(
-        use_synthetic=True,
+        use_synthetic=args.synthetic,
         device=args.device,
         seed=args.seed,
         quick_mode=args.quick,

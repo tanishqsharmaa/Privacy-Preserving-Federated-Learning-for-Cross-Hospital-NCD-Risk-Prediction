@@ -42,48 +42,124 @@ Hospital Nodes (×10)          Central Server
 │   ├── privacy.py        ← DP-SGD + RDP accounting
 │   ├── compression.py    ← Top-K gradient sparsification
 │   ├── explainability.py ← SHAP computation per node
-│   ├── attack_sim.py     ← Gradient inversion + MI attacks
 │   └── utils.py          ← Metrics, plotting, fairness
 ├── experiments/
 │   ├── centralized.py    ← Centralized baseline
 │   ├── fedavg.py         ← Vanilla FedAvg baseline
 │   └── run_all.py        ← Run all experiments
 ├── results/              ← Metrics, plots, logs
+├── download_data.py      ← BRFSS + NHANES data downloader
 └── requirements.txt
-```
-
-## Quick Start
-
-### 1. Install Dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 2. Prepare Data (Synthetic for testing)
-```bash
-python -m src.data_prep --synthetic --output data/processed
-python -m src.partition --input data/processed --num-clients 10 --alpha 0.5
-```
-
-### 3. Run Centralized Baseline
-```bash
-python -m experiments.centralized
-```
-
-### 4. Run Federated Learning (⚠️ Use GPU machine for this)
-```bash
-python -m src.server --num-rounds 50 --num-clients 10 --noise-multiplier 1.1
-```
-
-### 5. Run All Experiments
-```bash
-python -m experiments.run_all
 ```
 
 ## Datasets
 
 - **BRFSS**: [CDC BRFSS Annual Data](https://www.cdc.gov/brfss/annual_data/annual_data.htm) — 400K+ entries/year
 - **NHANES**: [CDC NHANES](https://www.cdc.gov/nchs/nhanes/index.htm) — Different measurement protocols
+
+---
+
+## Federated Learning Pipeline
+
+> Step-by-step execution guide for data preparation, partitioning, and experiment runs.
+
+### Step 0: Activate Virtual Environment
+
+```powershell
+.\virt\Scripts\Activate.ps1
+```
+
+### Step 1: Clean Previous Results *(Optional — Fresh Start)*
+
+```powershell
+Remove-Item data\processed -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item data\partitions -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item results -Recurse -Force -ErrorAction SilentlyContinue
+```
+
+### Step 2: Download Raw Data
+
+> Skip if already downloaded.
+
+```powershell
+python download_data.py
+```
+
+### Step 3: Process & Harmonize Raw Data
+
+Loads BRFSS (1.16 GB) + NHANES → harmonizes features → train/test split → saves CSVs + scaler.
+
+```powershell
+python -m src.data_prep --output data/processed
+```
+
+### Step 4: Partition Data for Federated Learning
+
+Dirichlet non-IID split → 5 BRFSS + 5 NHANES hospital nodes.
+
+```powershell
+python -m src.partition --input data/processed --num-clients 10 --alpha 0.5
+```
+
+### Step 5: Run Quick Test
+
+Runs: Centralized → Local-Only → FedAvg → FedAvg+DP → Full System → Sweeps (all abbreviated).  
+5 rounds, 3 clients — validates everything works.
+
+```powershell
+python -m experiments.run_all --quick
+```
+
+### Step 6: Run Full Experiment Suite
+
+Full 50-round training for all baselines + privacy-utility sweep + non-IID robustness sweep.  
+**Production run — takes several hours.**
+
+```powershell
+python -m experiments.run_all
+```
+
+### Or Run Individual Experiments
+
+```powershell
+# Centralized baseline (upper bound)
+python -m experiments.centralized
+
+# Local-only baseline (lower bound)
+python -m experiments.fedavg --baseline local_only
+
+# Vanilla FedAvg (no DP)
+python -m experiments.fedavg --baseline fedavg
+
+# FedAvg + DP
+python -m experiments.fedavg --baseline fedavg_dp
+
+# Full system (FedProx + DP + Compression)
+python -m experiments.run_all --quick   # use --quick for fast validation
+```
+
+---
+
+## Quick Copy-Paste (All Steps at Once)
+
+```powershell
+.\virt\Scripts\Activate.ps1
+
+# Clean slate
+Remove-Item data\processed -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item data\partitions -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item results -Recurse -Force -ErrorAction SilentlyContinue
+
+# Pipeline
+python download_data.py
+python -m src.data_prep --output data/processed
+python -m src.partition --input data/processed --num-clients 10 --alpha 0.5
+python -m experiments.run_all --quick
+```
+
+> **Note:** Steps 3 & 4 (data prep + partition) are also automatically handled by `run_all` if `data/processed` doesn't exist. But running them separately lets you validate each stage independently before committing to the full experiment run.
+
+---
 
 ## Hardware Notes
 

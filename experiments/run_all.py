@@ -41,7 +41,7 @@ logger = logging.getLogger("ppfl-ncd.run_all")
 
 def run_all_experiments(
     use_synthetic: bool = False,
-    device: str = "auto",
+    device: str = "xpu",
     seed: int = 42,
     quick_mode: bool = False,  # Reduced rounds for testing
 ):

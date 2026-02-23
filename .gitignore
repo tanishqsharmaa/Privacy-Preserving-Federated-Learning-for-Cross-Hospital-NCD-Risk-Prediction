@@ -1,1 +1,51 @@
-/virt
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+virt/
+intel_virt/
+env/
+
+# Data files
+data/raw/
+data/processed/
+data/partitions/
+
+# Results and outputs
+results/
+!results/.gitkeep
+*.pth
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.local
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+
+# Weights & Biases
+wandb/
+
+# Agent tooling
+.agent/

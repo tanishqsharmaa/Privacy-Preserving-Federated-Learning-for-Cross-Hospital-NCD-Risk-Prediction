@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.model import MultiTaskNCD, MultiTaskLoss
 from src.data_prep import prepare_dataset, HARMONIZED_FEATURES, TARGET_COLUMNS
+from src.config import get_best_device
 from src.utils import (
     setup_logging, set_seed, compute_multitask_metrics,
     save_metrics, DISEASE_NAMES
@@ -49,9 +50,7 @@ def train_centralized(
     set_seed(seed)
     os.makedirs(results_dir, exist_ok=True)
     
-    if device == "auto":
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    device = torch.device(device)
+    device = get_best_device(device)
     logger.info(f"Device: {device}")
     
     if hidden_dims is None:

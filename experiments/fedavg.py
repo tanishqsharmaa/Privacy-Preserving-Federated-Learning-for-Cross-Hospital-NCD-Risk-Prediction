@@ -18,7 +18,7 @@ from flwr.common import ndarrays_to_parameters
 from src.model import MultiTaskNCD
 from src.server import prepare_data_for_fl, FedProxStrategy
 from src.client import create_client_fn
-from src.config import ExperimentConfig
+from src.config import ExperimentConfig, get_best_device
 from src.utils import setup_logging, set_seed, save_metrics
 
 logger = logging.getLogger("ppfl-ncd.fedavg")
@@ -197,9 +197,9 @@ def run_local_only_baseline(
     config.device = device
     
     if device == "auto":
-        device_t = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device_t = get_best_device()
     else:
-        device_t = torch.device(device)
+        device_t = get_best_device(device)
     
     client_data, test_data, input_dim = prepare_data_for_fl(config, use_synthetic)
     X_test, Y_test = test_data

@@ -398,6 +398,245 @@ def load_nhanes(data_dir: str) -> pd.DataFrame:
 
 
 # ============================================================================
+# CDC WONDER DATA (Publicly Available - Chronic Disease Indicators)
+# ============================================================================
+
+def load_cdc_wonder(data_dir: str) -> pd.DataFrame:
+    """
+    Load and harmonize CDC WONDER / Chronic Disease Indicators dataset.
+
+    CDC WONDER provides aggregated chronic disease statistics.
+    Download from: https://wonder.cdc.gov/ or
+    https://data.cdc.gov/Chronic-Disease-Indicators/
+
+    Expected format: CSV with columns like
+    YearStart, LocationDesc, Topic, DataValue, StratificationCategory1, etc.
+
+    Note: CDC WONDER data is often AGGREGATED (county/state level), not
+    individual-level. We convert aggregated stats to individual-level
+    pseudo-samples for harmonization with BRFSS/NHANES.
+    """
+    logger.info(f"Loading CDC WONDER data from {data_dir}")
+
+    csv_files = [f for f in os.listdir(data_dir) if f.endswith(".csv")]
+    if not csv_files:
+        logger.warning(f"No CSV files found in {data_dir}")
+        return pd.DataFrame()
+
+    dfs = []
+    for f in csv_files:
+        try:
+            dfs.append(pd.read_csv(os.path.join(data_dir, f), low_memory=False))
+        except Exception as e:
+            logger.warning(f"Failed to load CDC WONDER file {f}: {e}")
+
+    if not dfs:
+        return pd.DataFrame()
+
+    df = pd.concat(dfs, ignore_index=True)
+
+    # Try to extract individual-level-like records
+    # CDC WONDER/CDI has columns: Topic, Question, DataValue, etc.
+    # We generate pseudo-individual samples from prevalence statistics
+    records = []
+    rng = np.random.RandomState(42)
+
+    # Check if this is CDI (Chronic Disease Indicators) format
+    if "Topic" in df.columns and "DataValue" in df.columns:
+        logger.info("Detected CDI format — generating pseudo-individual records")
+
+        # Extract prevalence data for our target conditions
+        topic_map = {
+            "Diabetes": "diabetes",
+            "Cardiovascular Disease": "cardiovascular_disease",
+            "Cardiovascular disease": "cardiovascular_disease",
+        }
+
+        for _, row in df.iterrows():
+            topic = row.get("Topic", "")
+            if any(key.lower() in str(topic).lower() for key in topic_map.keys()):
+                try:
+                    prevalence = float(row.get("DataValue", 0)) / 100.0
+                    n_samples = 100  # Generate 100 samples per row
+                    for _ in range(n_samples):
+                        record = {
+                            "age": rng.randint(18, 85),
+                            "sex": rng.choice([0.0, 1.0]),
+                            "bmi": np.clip(rng.normal(28, 6), 15, 55),
+                            "race_ethnicity": rng.choice([0, 1, 2, 3, 4]),
+                            "smoking_status": rng.choice([0, 1, 2]),
+                            "alcohol_consumption": max(0, rng.exponential(3)),
+                            "physical_activity": rng.choice([0.0, 1.0]),
+                            "blood_pressure_systolic": np.clip(rng.normal(125, 18), 80, 200),
+                            "blood_pressure_diastolic": np.clip(rng.normal(78, 12), 50, 130),
+                            "cholesterol_total": np.clip(rng.normal(200, 40), 100, 400),
+                            "cholesterol_hdl": np.clip(rng.normal(52, 15), 20, 100),
+                            "blood_glucose": np.clip(rng.normal(100, 30), 50, 300),
+                            "has_kidney_disease": rng.choice([0, 1], p=[0.92, 0.08]),
+                            "has_stroke_history": rng.choice([0, 1], p=[0.96, 0.04]),
+                            "has_arthritis": rng.choice([0, 1], p=[0.75, 0.25]),
+                            "diabetes": 0.0,
+                            "hypertension": 0.0,
+                            "cardiovascular_disease": 0.0,
+                            "source": "cdc_wonder",
+                        }
+                        # Set target based on topic and prevalence
+                        for key, target in topic_map.items():
+                            if key.lower() in str(topic).lower():
+                                record[target] = float(rng.random() < prevalence)
+                        records.append(record)
+                except (ValueError, TypeError):
+                    continue
+
+    if records:
+        result = pd.DataFrame(records)
+        logger.info(f"CDC WONDER: generated {len(result)} pseudo-individual records")
+        return result[HARMONIZED_FEATURES + TARGET_COLUMNS + ["source"]]
+
+    logger.warning("CDC WONDER: no usable data found")
+    return pd.DataFrame()
+
+
+def load_nhis(data_dir: str) -> pd.DataFrame:
+    """
+    Load and harmonize NHIS (National Health Interview Survey) dataset.
+
+    NHIS provides individual-level health data similar to BRFSS but
+    with different sampling methodology. Publicly available from:
+    https://www.cdc.gov/nchs/nhis/
+
+    Expected: CSV or Parquet files with NHIS variable names.
+    """
+    logger.info(f"Loading NHIS data from {data_dir}")
+
+    csv_files = [f for f in os.listdir(data_dir)
+                 if f.endswith((".csv", ".CSV"))]
+    if not csv_files:
+        logger.warning(f"No data files found in {data_dir}")
+        return pd.DataFrame()
+
+    dfs = []
+    for f in csv_files:
+        try:
+            dfs.append(pd.read_csv(os.path.join(data_dir, f), low_memory=False))
+        except Exception as e:
+            logger.warning(f"Failed to load NHIS file {f}: {e}")
+
+    if not dfs:
+        return pd.DataFrame()
+
+    df = pd.concat(dfs, ignore_index=True)
+
+    # NHIS variable mapping (adult sample)
+    nhis_map = {
+        "AGE_P": "age", "AGEP_A": "age",
+        "SEX": "sex", "SEX_A": "sex",
+        "BMI": "bmi", "BMICAT_A": "bmi",
+        "HISP_A": "race_ethnicity", "RACERPI2": "race_ethnicity",
+        "SMKSTAT2": "smoking_status", "SMOKEV_A": "smoking_status",
+        "ALCSTAT_A": "alcohol_consumption", "ALC12MNO": "alcohol_consumption",
+        "PHSTAT": "physical_activity", "VIGMIN_A": "physical_activity",
+        "DIBEV_A": "diabetes", "DIBEV1": "diabetes",
+        "HYPEV": "hypertension", "HYPDIF_A": "hypertension",
+        "CHDEV": "cardiovascular_disease", "CHDEV_A": "cardiovascular_disease",
+        "STREV": "has_stroke_history", "STREV_A": "has_stroke_history",
+        "KIDWEV": "has_kidney_disease", "KIDWEV_A": "has_kidney_disease",
+        "ARESSION_A": "has_arthritis", "ARTH1": "has_arthritis",
+    }
+
+    available_cols = {}
+    seen = set()
+    for k, v in nhis_map.items():
+        if k in df.columns and v not in seen:
+            available_cols[k] = v
+            seen.add(v)
+
+    if not available_cols:
+        logger.warning("NHIS: no recognized columns found")
+        return pd.DataFrame()
+
+    df_harmonized = df[list(available_cols.keys())].rename(columns=available_cols)
+
+    # Process sex (1=Male, 2=Female -> 0/1)
+    if "sex" in df_harmonized.columns:
+        df_harmonized["sex"] = (df_harmonized["sex"] == 1).astype(float)
+
+    # Process binary health conditions (1=Yes, 2=No -> 1/0)
+    binary_cols = ["diabetes", "hypertension", "cardiovascular_disease",
+                   "has_stroke_history", "has_kidney_disease", "has_arthritis"]
+    for col in binary_cols:
+        if col in df_harmonized.columns:
+            df_harmonized[col] = (df_harmonized[col] == 1).astype(float)
+
+    # Fill missing harmonized features
+    for col in HARMONIZED_FEATURES + TARGET_COLUMNS:
+        if col not in df_harmonized.columns:
+            df_harmonized[col] = np.nan
+
+    df_harmonized["source"] = "nhis"
+    logger.info(f"NHIS: loaded {len(df_harmonized)} records with {len(available_cols)} mapped features")
+
+    return df_harmonized[HARMONIZED_FEATURES + TARGET_COLUMNS + ["source"]]
+
+
+def load_uk_biobank(data_dir: str) -> pd.DataFrame:
+    """
+    Stub loader for UK Biobank data.
+
+    UK Biobank requires institutional access application.
+    Apply at: https://www.ukbiobank.ac.uk/
+
+    When access is granted, implement the actual data loading here.
+    """
+    logger.warning(
+        "UK Biobank loader is a stub. UK Biobank requires institutional access. "
+        "Apply at https://www.ukbiobank.ac.uk/"
+    )
+    return pd.DataFrame()
+
+
+def load_mimic_iv(data_dir: str) -> pd.DataFrame:
+    """
+    Stub loader for MIMIC-IV clinical data.
+
+    MIMIC-IV requires PhysioNet credentialed access.
+    Apply at: https://physionet.org/content/mimiciv/
+
+    When access is granted, implement the actual data loading here.
+    """
+    logger.warning(
+        "MIMIC-IV loader is a stub. MIMIC-IV requires PhysioNet credentialed access. "
+        "Apply at https://physionet.org/content/mimiciv/"
+    )
+    return pd.DataFrame()
+
+
+# Data source registry for dynamic loading
+DATA_SOURCE_LOADERS = {
+    "brfss": lambda raw_dir: _load_brfss_from_dir(os.path.join(raw_dir, "brfss")),
+    "nhanes": lambda raw_dir: load_nhanes(os.path.join(raw_dir, "nhanes")),
+    "cdc_wonder": lambda raw_dir: load_cdc_wonder(os.path.join(raw_dir, "cdc_wonder")),
+    "nhis": lambda raw_dir: load_nhis(os.path.join(raw_dir, "nhis")),
+    "uk_biobank": lambda raw_dir: load_uk_biobank(os.path.join(raw_dir, "uk_biobank")),
+    "mimic_iv": lambda raw_dir: load_mimic_iv(os.path.join(raw_dir, "mimic_iv")),
+}
+
+
+def _load_brfss_from_dir(brfss_dir: str) -> pd.DataFrame:
+    """Load all BRFSS files from a directory."""
+    if not os.path.exists(brfss_dir):
+        return pd.DataFrame()
+    dfs = []
+    for f in os.listdir(brfss_dir):
+        if f.endswith((".csv", ".XPT", ".xpt")):
+            try:
+                dfs.append(load_brfss(os.path.join(brfss_dir, f)))
+            except Exception as e:
+                logger.warning(f"Failed to load BRFSS file {f}: {e}")
+    return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+
+
+# ============================================================================
 # PREPROCESSING PIPELINE
 # ============================================================================
 
@@ -473,66 +712,75 @@ def prepare_dataset(
     synthetic_samples: int = 50000,
     seed: int = 42,
     test_size: float = 0.2,
+    data_sources: Optional[List[str]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Full data preparation pipeline.
     
     Args:
-        raw_dir: Directory containing raw BRFSS/NHANES files
+        raw_dir: Directory containing raw data files
         output_dir: Directory to save processed data
         use_synthetic: If True, generate synthetic data instead of loading real data
         synthetic_samples: Number of synthetic samples
         seed: Random seed
         test_size: Fraction for test set
+        data_sources: List of data source names to load (default: ["brfss", "nhanes"])
     
     Returns:
         (train_df, test_df)
     """
     os.makedirs(output_dir, exist_ok=True)
     
+    if data_sources is None:
+        data_sources = ["brfss", "nhanes"]
+    
     if use_synthetic:
         logger.info("Using synthetic data generation")
-        # Generate two "sources" to simulate BRFSS + NHANES
-        df_brfss = generate_synthetic_data(
-            synthetic_samples // 2, seed=seed, source="brfss"
-        )
-        df_nhanes = generate_synthetic_data(
-            synthetic_samples // 2, seed=seed + 1, source="nhanes"
-        )
-        # Make NHANES slightly different (non-IID simulation)
-        df_nhanes["bmi"] += np.random.RandomState(seed).normal(2, 1, len(df_nhanes))
-        df_nhanes["age"] += np.random.RandomState(seed).normal(5, 2, len(df_nhanes))
-        df_nhanes["age"] = np.clip(df_nhanes["age"], 18, 90)
+        # Generate N "sources" to simulate multiple hospitals
+        samples_per_source = max(1000, synthetic_samples // len(data_sources))
+        source_dfs = []
+        for i, source_name in enumerate(data_sources):
+            df_src = generate_synthetic_data(
+                samples_per_source, seed=seed + i, source=source_name
+            )
+            # Add slight distribution shifts to simulate non-IID
+            if i > 0:
+                rng = np.random.RandomState(seed + i)
+                df_src["bmi"] += rng.normal(i * 1.5, 1, len(df_src))
+                df_src["age"] += rng.normal(i * 3, 2, len(df_src))
+                df_src["age"] = np.clip(df_src["age"], 18, 90)
+            source_dfs.append(df_src)
         
-        df = pd.concat([df_brfss, df_nhanes], ignore_index=True)
+        df = pd.concat(source_dfs, ignore_index=True)
     else:
-        # Load real datasets
+        # Load real datasets using the registry
         dfs = []
-        
-        brfss_path = os.path.join(raw_dir, "brfss")
-        if os.path.exists(brfss_path):
-            for f in os.listdir(brfss_path):
-                if f.endswith((".csv", ".XPT", ".xpt")):
-                    try:
-                        dfs.append(load_brfss(os.path.join(brfss_path, f)))
-                    except Exception as e:
-                        logger.warning(f"Failed to load BRFSS file {f}: {e}")
-        
-        nhanes_path = os.path.join(raw_dir, "nhanes")
-        if os.path.exists(nhanes_path):
+        for source_name in data_sources:
+            loader = DATA_SOURCE_LOADERS.get(source_name)
+            if loader is None:
+                logger.warning(f"Unknown data source: {source_name}")
+                continue
+            
             try:
-                dfs.append(load_nhanes(nhanes_path))
+                source_df = loader(raw_dir)
+                if len(source_df) > 0:
+                    dfs.append(source_df)
+                    logger.info(f"Loaded {len(source_df)} records from {source_name}")
+                else:
+                    logger.warning(f"No data loaded from {source_name}")
             except Exception as e:
-                logger.warning(f"Failed to load NHANES: {e}")
+                logger.warning(f"Failed to load {source_name}: {e}")
         
         if not dfs:
             logger.warning("No real data found. Falling back to synthetic data.")
             return prepare_dataset(
                 raw_dir, output_dir, use_synthetic=True,
-                synthetic_samples=synthetic_samples, seed=seed, test_size=test_size
+                synthetic_samples=synthetic_samples, seed=seed,
+                test_size=test_size, data_sources=data_sources
             )
         
         df = pd.concat(dfs, ignore_index=True)
+
     
     # Train/test split (stratified by source)
     train_df, test_df = train_test_split(

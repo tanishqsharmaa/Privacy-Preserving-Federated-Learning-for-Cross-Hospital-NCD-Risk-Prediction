@@ -54,14 +54,14 @@ Hospital Nodes (×10)          Central Server
 
 ## Datasets
 
-- **BRFSS**: [CDC BRFSS Annual Data](https://www.cdc.gov/brfss/annual_data/annual_data.htm) — 400K+ entries/year
-- **NHANES**: [CDC NHANES](https://www.cdc.gov/nchs/nhanes/index.htm) — Different measurement protocols
+- **BRFSS**: [CDC BRFSS Annual Data](https://www.cdc.gov/brfss/annual_data/annual_data.htm) — 400K+ entries/year (self-reported)
+- **NHANES**: [CDC NHANES](https://www.cdc.gov/nchs/nhanes/index.htm) — Clinical exam data (lab-measured)
+
+> These two datasets have **different measurement protocols**, naturally simulating cross-hospital data heterogeneity for federated learning.
 
 ---
 
-## Federated Learning Pipeline
-
-> Step-by-step execution guide for data preparation, partitioning, and experiment runs.
+## Quick Start
 
 ### Step 0: Activate Virtual Environment
 
@@ -101,25 +101,63 @@ Dirichlet non-IID split → 5 BRFSS + 5 NHANES hospital nodes.
 python -m src.partition --input data/processed --num-clients 10 --alpha 0.5
 ```
 
-### Step 5: Run Quick Test
+### Step 5: Run Quick Smoke Test
 
-Runs: Centralized → Local-Only → FedAvg → FedAvg+DP → Full System → Sweeps (all abbreviated).  
-5 rounds, 3 clients — validates everything works.
+5 rounds, 4 clients — validates the entire pipeline works before committing to a full run.
 
 ```powershell
 python -m experiments.run_all --quick
 ```
 
-### Step 6: Run Full Experiment Suite
+> **Note:** Steps 3 & 4 are automatically handled by `run_all` if `data/processed` doesn't exist.
 
-Full 50-round training for all baselines + privacy-utility sweep + non-IID robustness sweep.  
-**Production run — takes several hours.**
+---
+
+## Running Experiments
+
+### Full Experiment Suite (All 12 Experiments)
+
+Runs centralized baseline + all FL ablations. Non-DP experiments: 50 rounds; DP experiments: 150 rounds.
 
 ```powershell
-python -m experiments.run_all
+# With synthetic data (faster, for development)
+python -m experiments.run_all --synthetic --device cuda
+
+# With real BRFSS + NHANES data (for publication)
+python -m experiments.run_all --device cuda
 ```
 
-### Or Run Individual Experiments
+### Run Specific Experiments Only
+
+Use `--experiments` to select individual experiments:
+
+```powershell
+# Run only the baseline comparisons
+python -m experiments.run_all --synthetic --device cuda --experiments fedavg_baseline fedprox_original
+
+# Run only DP experiments (150 rounds each)
+python -m experiments.run_all --synthetic --device cuda --experiments full_system_dp full_system_dp_comp
+
+# Run only the best-performing configs
+python -m experiments.run_all --synthetic --device cuda --experiments fix_fedprox_mu all_fixes
+```
+
+**Available experiment names:**
+| Experiment | Description |
+|---|---|
+| `fedavg_baseline` | Vanilla FedAvg (no enhancements) |
+| `fedprox_original` | FedProx with μ=0.01 |
+| `fix_focal_loss` | FedProx + Focal Loss |
+| `fix_weighted_sampling` | FedProx + Weighted Sampling |
+| `fix_lr_schedule` | FedProx + Warmup Cosine LR |
+| `fix_fedprox_mu` | FedProx with μ=0.1 (strongest FL config) |
+| `rec1_class_aware` | FedProx + Class-Aware Aggregation |
+| `rec3_fedbn` | FedProx + FedBN |
+| `all_fixes` | All enhancements combined (no DP) |
+| `full_system_dp` | Full system + Differential Privacy (150 rounds) |
+| `full_system_dp_comp` | Full system + DP + Top-K Compression (150 rounds) |
+
+### Run Individual Baselines
 
 ```powershell
 # Centralized baseline (upper bound)
@@ -128,58 +166,107 @@ python -m experiments.centralized
 # Local-only baseline (lower bound)
 python -m experiments.fedavg --baseline local_only
 
-# Vanilla FedAvg (no DP)
+# Vanilla FedAvg
 python -m experiments.fedavg --baseline fedavg
 
 # FedAvg + DP
 python -m experiments.fedavg --baseline fedavg_dp
-
-# Full system (FedProx + DP + Compression)
-python -m experiments.run_all --quick   # use --quick for fast validation
 ```
 
 ---
 
-## Quick Copy-Paste (All Steps at Once)
+## Multi-Seed Runs (Statistical Reliability)
+
+For publication, run 3–5 seeds and report **mean ± std**. This proves results are reproducible and not due to a lucky random initialization.
+
+```powershell
+# Run the full suite with 3 different seeds
+python -m experiments.run_all --synthetic --device cuda --seed 42
+python -m experiments.run_all --synthetic --device cuda --seed 123
+python -m experiments.run_all --synthetic --device cuda --seed 456
+
+# (Optional) 5 seeds for stronger statistical claims
+python -m experiments.run_all --synthetic --device cuda --seed 789
+python -m experiments.run_all --synthetic --device cuda --seed 1024
+```
+
+Each run produces a separate timestamped results directory under `results/`.
+
+---
+
+## Quick Copy-Paste Recipes
+
+### Recipe 1: Quick Validation (5 min)
+
+```powershell
+.\virt\Scripts\Activate.ps1
+python -m experiments.run_all --quick
+```
+
+### Recipe 2: Full Synthetic Run — Single Seed (~90 min on GPU)
+
+```powershell
+.\virt\Scripts\Activate.ps1
+Remove-Item results -Recurse -Force -ErrorAction SilentlyContinue
+python -m experiments.run_all --synthetic --device cuda --seed 42
+```
+
+### Recipe 3: Full Synthetic Run — 3 Seeds (~5 hours on GPU)
+
+```powershell
+.\virt\Scripts\Activate.ps1
+python -m experiments.run_all --synthetic --device cuda --seed 42
+python -m experiments.run_all --synthetic --device cuda --seed 123
+python -m experiments.run_all --synthetic --device cuda --seed 456
+```
+
+### Recipe 4: Real Data Run — Publication Quality (~4–6 hours on GPU)
 
 ```powershell
 .\virt\Scripts\Activate.ps1
 
-# Clean slate
-Remove-Item data\processed -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item data\partitions -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item results -Recurse -Force -ErrorAction SilentlyContinue
-
-# Pipeline
+# Download & prepare real data
 python download_data.py
 python -m src.data_prep --output data/processed
 python -m src.partition --input data/processed --num-clients 10 --alpha 0.5
-python -m experiments.run_all --quick
+
+# Run all experiments with 3 seeds
+python -m experiments.run_all --device cuda --seed 42
+python -m experiments.run_all --device cuda --seed 123
+python -m experiments.run_all --device cuda --seed 456
 ```
 
-> **Note:** Steps 3 & 4 (data prep + partition) are also automatically handled by `run_all` if `data/processed` doesn't exist. But running them separately lets you validate each stage independently before committing to the full experiment run.
+### Recipe 5: DP Experiments Only — Extended (150 rounds, ~75 min on GPU)
+
+```powershell
+.\virt\Scripts\Activate.ps1
+python -m experiments.run_all --synthetic --device cuda --experiments full_system_dp full_system_dp_comp
+```
 
 ---
 
 ## Hardware Notes
 
-| Phase | Hardware | Notes |
-|-------|----------|-------|
-| Data prep, partitioning | Any CPU | Fast, <5 min |
-| Centralized baseline | CPU OK | ~10-20 min |
-| FL training (no DP) | GPU recommended | ~30 min |
-| FL training (with DP) | **GPU required** | ~2-4 hours |
-| Attack simulation | GPU recommended | ~30-60 min |
+| Phase | Hardware | Estimated Time |
+|-------|----------|----------------|
+| Data prep, partitioning | Any CPU | < 5 min |
+| Centralized baseline | CPU OK | ~10–20 min |
+| FL training (no DP, 50 rounds) | GPU recommended | ~7 min per experiment |
+| FL training (with DP, 150 rounds) | **GPU required** | ~37 min per experiment |
+| Full suite (single seed) | GPU | ~90 min synthetic, ~4 hours real |
+| Attack simulation | GPU recommended | ~30–60 min |
 
 ## Key Evaluation Metrics
 
-| Metric | Target |
-|--------|--------|
-| AUC-ROC (per disease) | > 0.80 |
-| Privacy Budget ε | < 3.0 |
-| MI Attack Success | < 55% |
-| Communication Savings | 40%+ vs FedAvg |
-| Equalized Odds Gap | < 0.05 |
+| Metric | Target | Achieved (Synthetic) |
+|--------|--------|----------------------|
+| AUC-ROC (macro avg) | > 0.80 | 0.9348 (FL) / 0.9129 (DP-FL) |
+| FL vs Centralized gap | < 5% | 0.04% |
+| DP AUC drop | < 5% | 2.4% at ε=2.41 |
+| Privacy Budget ε | < 3.0 | 2.41 |
+| MI Attack Success | < 55% | — |
+| Communication Savings | 40%+ vs FedAvg | — |
+| Equalized Odds Gap | < 0.05 | — |
 
 ## References
 

@@ -211,6 +211,7 @@ def get_experiments(quick_mode: bool = False) -> dict:
     # 10. Full system with DP
     experiments["full_system_dp"] = {
         **base,
+        "num_rounds": 150,  # DP needs more rounds (slower convergence due to noise)
         "loss_type": "focal",
         "focal_gamma": 2.0,
         "fedprox_mu": 0.1,
@@ -228,6 +229,7 @@ def get_experiments(quick_mode: bool = False) -> dict:
     # 11. Full system with DP + Compression
     experiments["full_system_dp_comp"] = {
         **base,
+        "num_rounds": 150,  # DP needs more rounds (slower convergence due to noise)
         "loss_type": "focal",
         "focal_gamma": 2.0,
         "fedprox_mu": 0.1,
